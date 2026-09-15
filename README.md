@@ -17,6 +17,19 @@ ctest --test-dir build -C Release --output-on-failure
 
 在 VS Code 中请运行工作区任务 `CMake: Test ThreadPool`，不要运行 Go 扩展提供的 `test package` 任务。本项目是 C++/CMake 项目，不包含 Go 模块。
 
+## 测试
+
+`tests/CMakeLists.txt` 固定使用 GoogleTest 1.18.0；首次配置时 CMake 会下载依赖。GoogleTest 自动向 CTest 登记 10 个独立测试，覆盖基本提交、参数校验、异常传递、并发执行、队列超时、阻塞提交、空闲等待和析构清空队列等行为。Debug 和 Release 构建都会执行这些检查。
+只需构建库时，可在配置时设置 `-DBUILD_TESTING=OFF`，跳过 GoogleTest 下载。
+
+```powershell
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+ctest --test-dir build -C Debug -R ThreadPool.QueueTimeout --output-on-failure
+```
+
+最后一条命令只运行队列超时测试。也可以直接运行 `build/Debug/ThreadPoolTest.exe` 来执行全部测试。GitHub Actions 会在 Windows 和 Linux 上分别验证 Debug、Release 构建。
+
 ## 使用
 
 ```cpp
