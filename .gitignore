@@ -38,3 +38,6 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+#markdownlint-ignore-file
+AGENTS.md

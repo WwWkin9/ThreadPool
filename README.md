@@ -15,6 +15,8 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
+在 VS Code 中请运行工作区任务 `CMake: Test ThreadPool`，不要运行 Go 扩展提供的 `test package` 任务。本项目是 C++/CMake 项目，不包含 Go 模块。
+
 ## 使用
 
 ```cpp

@@ -29,6 +29,10 @@
                 "--output-on-failure"
             ],
             "dependsOn": "CMake: Build ThreadPool",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
             "problemMatcher": []
         },
         {
