@@ -14,19 +14,20 @@
 #include <utility>
 #include <vector>
 
+#define AGING_RATE 2
+
 struct Task
 {
 	int priority;
+	std::chrono::steady_clock::time_point enqueue_time;
 	std::function<void()> function;
-};
 
-struct TaskComparator
-{
-	bool operator()(
-		const Task& a,
-		const Task& b
-	){
-		return a.priority < b.priority;
+	auto effectivepriority() const {
+		auto waitTime = std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::steady_clock::now() - enqueue_time
+		).count();
+
+		return priority + waitTime * AGING_RATE;
 	}
 };
 
@@ -66,8 +67,9 @@ public:
 			t.function = [task](){
 				(*task)();
 			};
+			t.enqueue_time = std::chrono::steady_clock::now();
 
-			tasks_.push(std::move(t));
+			tasks_.push_back(std::move(t));
 		}
 
 		notEmptyCv_.notify_one();
@@ -105,8 +107,9 @@ public:
 			t.function = [task](){
 				(*task)();
 			};
+			t.enqueue_time = std::chrono::steady_clock::now();
 
-			tasks_.push(std::move(t));
+			tasks_.push_back(std::move(t));
 		}
 
 		notEmptyCv_.notify_one();
@@ -114,11 +117,12 @@ public:
 	}
 
 	void waitIdle();
+	Task popBestTask();
 	~ThreadPool();
 
 private:
 	std::vector<std::thread> workers_;
-	std::priority_queue<Task, std::vector<Task>, TaskComparator> tasks_;
+	std::vector<Task> tasks_;
 	std::mutex mtx_;
 	bool stop_ = false;
 	std::size_t maxQueueSize_;

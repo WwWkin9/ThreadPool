@@ -22,8 +22,7 @@ ThreadPool::ThreadPool(std::size_t threadCount, std::size_t maxQueueSize)
 					if (stop_ && tasks_.empty()) {
 						return;
 					}
-					task = std::move(tasks_.top());
-					tasks_.pop();
+					task = popBestTask();
 					++activeTasks_;
 				}
 
@@ -62,4 +61,19 @@ ThreadPool::~ThreadPool() {
 			worker.join();
 		}
 	}
+}
+
+Task ThreadPool::popBestTask(){
+	std::vector<Task>::iterator best = tasks_.begin();
+	auto bestPriority = best->effectivepriority();
+	for (std::vector<Task>::iterator it = best + 1; it != tasks_.end(); ++it) {
+		const auto effectivePriority = it->effectivepriority();
+		if (bestPriority < effectivePriority) {
+			best = it;
+			bestPriority = effectivePriority;
+		}
+	}
+	Task bestTask = std::move(*best);
+	tasks_.erase(best);
+	return bestTask;
 }
