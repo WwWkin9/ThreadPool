@@ -13,7 +13,7 @@ ThreadPool::ThreadPool(std::size_t threadCount, std::size_t maxQueueSize)
 	for (std::size_t i = 0; i < threadCount; ++i) {
 		workers_.emplace_back([this]() {
 			while (true) {
-				std::function<void()> task;
+				Task task;
 				{
 					std::unique_lock<std::mutex> lock(mtx_);
 					notEmptyCv_.wait(lock, [this]() {
@@ -22,13 +22,13 @@ ThreadPool::ThreadPool(std::size_t threadCount, std::size_t maxQueueSize)
 					if (stop_ && tasks_.empty()) {
 						return;
 					}
-					task = std::move(tasks_.front());
+					task = std::move(tasks_.top());
 					tasks_.pop();
 					++activeTasks_;
 				}
 
 				notFullCv_.notify_one();
-				task();
+				task.function();
 
 				{
 					std::lock_guard<std::mutex> lock(mtx_);

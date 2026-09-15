@@ -14,6 +14,23 @@
 #include <utility>
 #include <vector>
 
+struct Task
+{
+	int priority;
+	std::function<void()> function;
+};
+
+struct TaskComparator
+{
+	bool operator()(
+		const Task& a,
+		const Task& b
+	){
+		return a.priority < b.priority;
+	}
+};
+
+
 class ThreadPool {
 public:
 	ThreadPool(const ThreadPool&) = delete;
@@ -22,7 +39,7 @@ public:
 	explicit ThreadPool(std::size_t threadCount = 4, std::size_t maxQueueSize = 1000);
 
 	template<typename F, typename... Args>
-	auto submit(F&& f, Args&&... args)
+	auto submit(int priority, F&& f, Args&&... args)
 		-> std::future<std::invoke_result_t<F, Args...>>
 	{
 		using ReturnType = std::invoke_result_t<F, Args...>;
@@ -35,15 +52,22 @@ public:
 
 		{
 			std::unique_lock<std::mutex> lock(mtx_);
+
 			notFullCv_.wait(lock, [this]() {
 				return stop_ || tasks_.size() < maxQueueSize_;
 			});
+
 			if (stop_) {
 				throw std::runtime_error("submit on stopped ThreadPool");
 			}
-			tasks_.push([task]() {
+
+			Task t;
+			t.priority = priority;
+			t.function = [task](){
 				(*task)();
-			});
+			};
+
+			tasks_.push(std::move(t));
 		}
 
 		notEmptyCv_.notify_one();
@@ -51,7 +75,7 @@ public:
 	}
 
 	template<typename Rep, typename Period, typename F, typename... Args>
-	auto submitFor(const std::chrono::duration<Rep, Period>& timeout, F&& f, Args&&... args)
+	auto submitFor(int priority, const std::chrono::duration<Rep, Period>& timeout, F&& f, Args&&... args)
 		-> std::future<std::invoke_result_t<F, Args...>>
 	{
 		using ReturnType = std::invoke_result_t<F, Args...>;
@@ -64,18 +88,25 @@ public:
 
 		{
 			std::unique_lock<std::mutex> lock(mtx_);
+
 			const bool ready = notFullCv_.wait_for(lock, timeout, [this]() {
 				return stop_ || tasks_.size() < maxQueueSize_;
 			});
+
 			if (stop_) {
 				throw std::runtime_error("submit on stopped ThreadPool");
 			}
 			if (!ready) {
 				throw std::runtime_error("ThreadPool submit timeout");
 			}
-			tasks_.push([task]() {
+
+			Task t;
+			t.priority = priority;
+			t.function = [task](){
 				(*task)();
-			});
+			};
+
+			tasks_.push(std::move(t));
 		}
 
 		notEmptyCv_.notify_one();
@@ -87,7 +118,7 @@ public:
 
 private:
 	std::vector<std::thread> workers_;
-	std::queue<std::function<void()>> tasks_;
+	std::priority_queue<Task, std::vector<Task>, TaskComparator> tasks_;
 	std::mutex mtx_;
 	bool stop_ = false;
 	std::size_t maxQueueSize_;

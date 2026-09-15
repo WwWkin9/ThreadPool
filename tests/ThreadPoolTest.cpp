@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -39,13 +40,26 @@ private:
 
 TEST(ThreadPool, BasicSubmission) {
 	ThreadPool pool(2, 4);
-	auto sum = pool.submit([](int left, int right) { return left + right; }, 2, 3);
-	auto timed = pool.submitFor(1s, [] { return 42; });
-	auto voidTask = pool.submit([] {});
+	auto sum = pool.submit(100, [](int left, int right) { return left + right; }, 2, 3);
+	auto timed = pool.submitFor(100, 1s, [] { return 42; });
+	auto voidTask = pool.submit(100, [] {});
 	EXPECT_EQ(sum.get(), 5);
 	EXPECT_EQ(timed.get(), 42);
 	EXPECT_NO_THROW(voidTask.get());
 	pool.waitIdle();
+}
+
+TEST(ThreadPool, DefaultConfiguration) {
+	ThreadPool pool;
+	EXPECT_EQ(pool.submit(0, [] { return 7; }).get(), 7);
+}
+
+TEST(ThreadPool, ReferenceArgument) {
+	ThreadPool pool(1, 1);
+	int value = 10;
+	auto result = pool.submit(0, [](int& target) { return ++target; }, std::ref(value));
+	EXPECT_EQ(result.get(), 11);
+	EXPECT_EQ(value, 11);
 }
 
 TEST(ThreadPool, InvalidConfiguration) {
@@ -55,14 +69,18 @@ TEST(ThreadPool, InvalidConfiguration) {
 
 TEST(ThreadPool, TaskException) {
 	ThreadPool pool(1, 2);
-	auto failed = pool.submit([]() -> int { throw std::logic_error("task failed"); });
+	auto failed = pool.submit(90, []() -> int { throw std::logic_error("task failed"); });
 	EXPECT_THROW(failed.get(), std::logic_error);
-	EXPECT_EQ(pool.submit([] { return 7; }).get(), 7);
+	auto timedFailed = pool.submitFor(90, 1s, []() -> int {
+		throw std::logic_error("timed task failed");
+	});
+	EXPECT_THROW(timedFailed.get(), std::logic_error);
+	EXPECT_EQ(pool.submit(90, [] { return 7; }).get(), 7);
 }
 
 TEST(ThreadPool, MoveOnlyCallable) {
 	ThreadPool pool(1, 1);
-	auto result = pool.submit([value = std::make_unique<int>(42)] { return *value; });
+	auto result = pool.submit(10, [value = std::make_unique<int>(42)] { return *value; });
 	EXPECT_EQ(result.get(), 42);
 }
 
@@ -73,11 +91,11 @@ TEST(ThreadPool, ConcurrentWorkers) {
 	auto secondStarted = std::make_shared<std::promise<void>>();
 	auto firstReady = firstStarted->get_future();
 	auto secondReady = secondStarted->get_future();
-	auto first = pool.submit([firstStarted, signal = gate.signal()] {
+	auto first = pool.submit(10, [firstStarted, signal = gate.signal()] {
 		firstStarted->set_value();
 		signal.wait();
 	});
-	auto second = pool.submit([secondStarted, signal = gate.signal()] {
+	auto second = pool.submit(20, [secondStarted, signal = gate.signal()] {
 		secondStarted->set_value();
 		signal.wait();
 	});
@@ -89,21 +107,44 @@ TEST(ThreadPool, ConcurrentWorkers) {
 	second.get();
 }
 
+TEST(ThreadPool, HigherPriorityQueuedTasksRunFirst) {
+	ThreadPool pool(1, 4);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	auto order = std::make_shared<std::vector<int>>();
+	auto running = pool.submit(0, [started, order, signal = gate.signal()] {
+		order->push_back(0);
+		started->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+	auto low = pool.submit(-10, [order] { order->push_back(-10); });
+	auto high = pool.submit(100, [order] { order->push_back(100); });
+	auto medium = pool.submit(20, [order] { order->push_back(20); });
+	gate.open();
+	running.get();
+	low.get();
+	high.get();
+	medium.get();
+	EXPECT_EQ(*order, (std::vector<int>{0, 100, 20, -10}));
+}
+
 TEST(ThreadPool, QueueTimeout) {
 	ThreadPool pool(1, 1);
 	Gate gate;
 	auto started = std::make_shared<std::promise<void>>();
 	auto ready = started->get_future();
-	auto running = pool.submit([started, signal = gate.signal()] {
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
 		started->set_value();
 		signal.wait();
 		return 1;
 	});
 	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-	auto queued = pool.submit([] { return 2; });
+	auto queued = pool.submit(1, [] { return 2; });
 	bool timedOut = false;
 	try {
-		pool.submitFor(100ms, [] { return 3; });
+		pool.submitFor(2, 100ms, [] { return 3; });
 	} catch (const std::runtime_error& error) {
 		timedOut = std::string(error.what()) == "ThreadPool submit timeout";
 	}
@@ -113,23 +154,77 @@ TEST(ThreadPool, QueueTimeout) {
 	EXPECT_EQ(queued.get(), 2);
 }
 
-TEST(ThreadPool, BlockingSubmission) {
+TEST(ThreadPool, ZeroTimeoutUsesAvailableCapacity) {
+	ThreadPool pool(1, 1);
+	EXPECT_EQ(pool.submitFor(0, 0ms, [] { return 7; }).get(), 7);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
+		started->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+	auto queued = pool.submit(1, [] {});
+	bool timedOut = false;
+	try {
+		pool.submitFor(2, 0ms, [] {});
+	} catch (const std::runtime_error& error) {
+		timedOut = std::string(error.what()) == "ThreadPool submit timeout";
+	}
+	gate.open();
+	EXPECT_TRUE(timedOut);
+	running.get();
+	queued.get();
+}
+
+TEST(ThreadPool, TimedSubmissionResumesWhenQueueDrains) {
 	ThreadPool pool(1, 1);
 	Gate gate;
 	auto started = std::make_shared<std::promise<void>>();
 	auto ready = started->get_future();
-	auto running = pool.submit([started, signal = gate.signal()] {
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
 		started->set_value();
 		signal.wait();
 		return 1;
 	});
 	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-	auto queued = pool.submit([] { return 2; });
+	auto queued = pool.submit(1, [] { return 2; });
 	auto producerStarted = std::make_shared<std::promise<void>>();
 	auto producerReady = producerStarted->get_future();
 	auto producer = std::async(std::launch::async, [&pool, producerStarted] {
 		producerStarted->set_value();
-		return pool.submit([] { return 3; });
+		return pool.submitFor(2, 2s, [] { return 3; });
+	});
+	const bool startedSubmitting = producerReady.wait_for(2s) == std::future_status::ready;
+	const bool blocked = producer.wait_for(100ms) == std::future_status::timeout;
+	gate.open();
+	EXPECT_TRUE(startedSubmitting);
+	EXPECT_TRUE(blocked) << "timed submit should wait with a full queue";
+	ASSERT_EQ(producer.wait_for(2s), std::future_status::ready);
+	auto third = producer.get();
+	EXPECT_EQ(running.get(), 1);
+	EXPECT_EQ(queued.get(), 2);
+	EXPECT_EQ(third.get(), 3);
+}
+
+TEST(ThreadPool, BlockingSubmission) {
+	ThreadPool pool(1, 1);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
+		started->set_value();
+		signal.wait();
+		return 1;
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+	auto queued = pool.submit(1, [] { return 2; });
+	auto producerStarted = std::make_shared<std::promise<void>>();
+	auto producerReady = producerStarted->get_future();
+	auto producer = std::async(std::launch::async, [&pool, producerStarted] {
+		producerStarted->set_value();
+		return pool.submit(2, [] { return 3; });
 	});
 	const bool startedSubmitting = producerReady.wait_for(2s) == std::future_status::ready;
 	const bool blocked = producer.wait_for(100ms) == std::future_status::timeout;
@@ -148,12 +243,12 @@ TEST(ThreadPool, WaitForIdle) {
 	Gate gate;
 	auto started = std::make_shared<std::promise<void>>();
 	auto ready = started->get_future();
-	auto running = pool.submit([started, signal = gate.signal()] {
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
 		started->set_value();
 		signal.wait();
 	});
 	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-	auto queued = pool.submit([] {});
+	auto queued = pool.submit(1, [] {});
 	auto waiterStarted = std::make_shared<std::promise<void>>();
 	auto waiterReady = waiterStarted->get_future();
 	auto waiter = std::async(std::launch::async, [&pool, waiterStarted] {
@@ -171,6 +266,32 @@ TEST(ThreadPool, WaitForIdle) {
 	queued.get();
 }
 
+TEST(ThreadPool, WaitForIdleWithOnlyActiveTask) {
+	ThreadPool pool(1, 1);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
+		started->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+	auto waiterStarted = std::make_shared<std::promise<void>>();
+	auto waiterReady = waiterStarted->get_future();
+	auto waiter = std::async(std::launch::async, [&pool, waiterStarted] {
+		waiterStarted->set_value();
+		pool.waitIdle();
+	});
+	const bool startedWaiting = waiterReady.wait_for(2s) == std::future_status::ready;
+	const bool blocked = waiter.wait_for(100ms) == std::future_status::timeout;
+	gate.open();
+	EXPECT_TRUE(startedWaiting);
+	EXPECT_TRUE(blocked) << "waitIdle should count running work even with an empty queue";
+	ASSERT_EQ(waiter.wait_for(2s), std::future_status::ready);
+	waiter.get();
+	running.get();
+}
+
 TEST(ThreadPool, DestructorDrainsQueue) {
 	std::future<int> running;
 	std::future<int> queued;
@@ -178,13 +299,13 @@ TEST(ThreadPool, DestructorDrainsQueue) {
 		ThreadPool pool(1, 1);
 		auto started = std::make_shared<std::promise<void>>();
 		auto ready = started->get_future();
-		running = pool.submit([started] {
+		running = pool.submit(0, [started] {
 			started->set_value();
 			std::this_thread::sleep_for(100ms);
 			return 1;
 		});
 		ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-		queued = pool.submit([] { return 2; });
+		queued = pool.submit(1, [] { return 2; });
 	}
 	EXPECT_EQ(running.get(), 1);
 	EXPECT_EQ(queued.get(), 2);
@@ -198,7 +319,7 @@ TEST(ThreadPool, ConcurrentProducers) {
 		producers.push_back(std::async(std::launch::async, [&pool, &executed] {
 			std::vector<std::future<int>> tasks;
 			for (int task = 0; task < 50; ++task) {
-				tasks.push_back(pool.submit([&executed] {
+				tasks.push_back(pool.submit(task % 5, [&executed] {
 					++executed;
 					return 1;
 				}));
