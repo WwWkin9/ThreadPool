@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <iostream>
 #include <stdexcept>
 
 int main() {
@@ -11,11 +12,13 @@ int main() {
 		return left + right;
 	}, 2, 3);
 	assert(value.get() == 5);
+	std::cout << "submit test passed" << std::endl;
 
 	auto delayed = pool.submitFor(std::chrono::seconds(1), [] {
 		return 42;
 	});
 	assert(delayed.get() == 42);
+	std::cout << "submitFor test passed" << std::endl;
 
 	pool.waitIdle();
 
@@ -26,6 +29,7 @@ int main() {
 		invalidThreadCount = true;
 	}
 	assert(invalidThreadCount);
+	std::cout << "thread count validation passed" << std::endl;
 
 	bool invalidQueueSize = false;
 	try {
@@ -34,6 +38,8 @@ int main() {
 		invalidQueueSize = true;
 	}
 	assert(invalidQueueSize);
+	std::cout << "queue size validation passed" << std::endl;
+	std::cout << "all tests passed" << std::endl;
 
 	return 0;
 }

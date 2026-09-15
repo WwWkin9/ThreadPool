@@ -1,0 +1,42 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: Build ThreadPool",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build",
+                "--config",
+                "Release"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "CMake: Test ThreadPool",
+            "type": "process",
+            "command": "ctest",
+            "args": [
+                "--test-dir",
+                "${workspaceFolder}/build",
+                "-C",
+                "Release",
+                "--output-on-failure"
+            ],
+            "dependsOn": "CMake: Build ThreadPool",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: Run ThreadPoolTest",
+            "type": "process",
+            "command": "${workspaceFolder}/build/Release/ThreadPoolTest.exe",
+            "dependsOn": "CMake: Build ThreadPool",
+            "problemMatcher": []
+        }
+    ]
+}
