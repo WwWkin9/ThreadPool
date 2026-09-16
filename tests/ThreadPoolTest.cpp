@@ -65,6 +65,35 @@ TEST(ThreadPool, ReferenceArgument) {
 TEST(ThreadPool, InvalidConfiguration) {
 	EXPECT_THROW({ ThreadPool pool(0); }, std::invalid_argument);
 	EXPECT_THROW({ ThreadPool pool(1, 0); }, std::invalid_argument);
+	EXPECT_THROW({ ThreadPool pool(2, 4, 2); }, std::invalid_argument);
+}
+
+TEST(ThreadPool, HighPriorityClassExecutes) {
+	ThreadPool pool(2, 4, 1);
+	auto result = pool.submit(TaskType::High, 10, [] { return 42; });
+	EXPECT_EQ(result.get(), 42);
+}
+
+TEST(ThreadPool, ReservedHighWorkerDoesNotRunNormalTasks) {
+	ThreadPool pool(2, 4, 1);
+	Gate gate;
+	auto normalStarted = std::make_shared<std::promise<void>>();
+	auto normalReady = normalStarted->get_future();
+	auto runningNormal = pool.submit(0, [normalStarted, signal = gate.signal()] {
+		normalStarted->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(normalReady.wait_for(2s), std::future_status::ready);
+
+	auto queuedNormal = pool.submit(1, [] { return 1; });
+	auto high = pool.submit(TaskType::High, 1, [] { return 2; });
+	EXPECT_EQ(high.wait_for(2s), std::future_status::ready);
+	EXPECT_EQ(queuedNormal.wait_for(100ms), std::future_status::timeout);
+
+	gate.open();
+	EXPECT_EQ(high.get(), 2);
+	runningNormal.get();
+	EXPECT_EQ(queuedNormal.get(), 1);
 }
 
 TEST(ThreadPool, TaskException) {

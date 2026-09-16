@@ -7,127 +7,164 @@
 #include <future>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#define AGING_RATE 2
+namespace threadpool {
+	inline constexpr int AgingRate = 2;
 
-struct Task
-{
-	int priority;
-	std::chrono::steady_clock::time_point enqueue_time;
-	std::function<void()> function;
+	enum class TaskType {
+		High,
+		Normal
+	};
+}
 
-	auto effectivepriority() const {
-		auto waitTime = std::chrono::duration_cast<std::chrono::seconds>(
-			std::chrono::steady_clock::now() - enqueue_time
-		).count();
-
-		return priority + waitTime * AGING_RATE;
-	}
-};
-
+using threadpool::TaskType;
 
 class ThreadPool {
 public:
 	ThreadPool(const ThreadPool&) = delete;
 	ThreadPool& operator=(const ThreadPool&) = delete;
 
-	explicit ThreadPool(std::size_t threadCount = 4, std::size_t maxQueueSize = 1000);
+	ThreadPool();
+	explicit ThreadPool(
+		std::size_t threadCount,
+		std::size_t maxQueueSize = 1000,
+		std::size_t reservedHighWorkers = 0);
+	~ThreadPool();
 
 	template<typename F, typename... Args>
 	auto submit(int priority, F&& f, Args&&... args)
 		-> std::future<std::invoke_result_t<F, Args...>>
 	{
-		using ReturnType = std::invoke_result_t<F, Args...>;
-
-		auto task = std::make_shared<std::packaged_task<ReturnType()>>(
-			std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-		);
-
-		std::future<ReturnType> result = task->get_future();
-
-		{
-			std::unique_lock<std::mutex> lock(mtx_);
-
-			notFullCv_.wait(lock, [this]() {
-				return stop_ || tasks_.size() < maxQueueSize_;
-			});
-
-			if (stop_) {
-				throw std::runtime_error("submit on stopped ThreadPool");
-			}
-
-			Task t;
-			t.priority = priority;
-			t.function = [task](){
-				(*task)();
-			};
-			t.enqueue_time = std::chrono::steady_clock::now();
-
-			tasks_.push_back(std::move(t));
-		}
-
-		notEmptyCv_.notify_one();
-		return result;
+		return submit(
+			TaskType::Normal,
+			priority,
+			std::forward<F>(f),
+			std::forward<Args>(args)...);
 	}
 
-	template<typename Rep, typename Period, typename F, typename... Args>
-	auto submitFor(int priority, const std::chrono::duration<Rep, Period>& timeout, F&& f, Args&&... args)
+	template<typename F, typename... Args>
+	auto submit(TaskType taskType, int priority, F&& f, Args&&... args)
 		-> std::future<std::invoke_result_t<F, Args...>>
 	{
 		using ReturnType = std::invoke_result_t<F, Args...>;
 
-		auto task = std::make_shared<std::packaged_task<ReturnType()>>(
-			std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-		);
+		auto packagedTask = std::make_shared<std::packaged_task<ReturnType()>>(
+			std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+		auto result = packagedTask->get_future();
 
-		std::future<ReturnType> result = task->get_future();
+		enqueue(Task{
+			taskType,
+			priority,
+			std::chrono::steady_clock::now(),
+			[packagedTask]() { (*packagedTask)(); }
+		});
 
-		{
-			std::unique_lock<std::mutex> lock(mtx_);
+		return result;
+	}
 
-			const bool ready = notFullCv_.wait_for(lock, timeout, [this]() {
-				return stop_ || tasks_.size() < maxQueueSize_;
-			});
+	template<typename Rep, typename Period, typename F, typename... Args>
+	auto submitFor(
+		int priority,
+		const std::chrono::duration<Rep, Period>& timeout,
+		F&& f,
+		Args&&... args)
+		-> std::future<std::invoke_result_t<F, Args...>>
+	{
+		return submitFor(
+			TaskType::Normal,
+			priority,
+			timeout,
+			std::forward<F>(f),
+			std::forward<Args>(args)...);
+	}
 
-			if (stop_) {
-				throw std::runtime_error("submit on stopped ThreadPool");
-			}
-			if (!ready) {
-				throw std::runtime_error("ThreadPool submit timeout");
-			}
+	template<typename Rep, typename Period, typename F, typename... Args>
+	auto submitFor(
+		TaskType taskType,
+		int priority,
+		const std::chrono::duration<Rep, Period>& timeout,
+		F&& f,
+		Args&&... args)
+		-> std::future<std::invoke_result_t<F, Args...>>
+	{
+		using ReturnType = std::invoke_result_t<F, Args...>;
 
-			Task t;
-			t.priority = priority;
-			t.function = [task](){
-				(*task)();
-			};
-			t.enqueue_time = std::chrono::steady_clock::now();
+		auto packagedTask = std::make_shared<std::packaged_task<ReturnType()>>(
+			std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+		auto result = packagedTask->get_future();
 
-			tasks_.push_back(std::move(t));
-		}
+		enqueueFor(Task{
+			taskType,
+			priority,
+			std::chrono::steady_clock::now(),
+			[packagedTask]() { (*packagedTask)(); }
+		}, timeout);
 
-		notEmptyCv_.notify_one();
 		return result;
 	}
 
 	void waitIdle();
-	Task popBestTask();
-	~ThreadPool();
 
 private:
+	struct Task {
+		TaskType type;
+		int priority;
+		std::chrono::steady_clock::time_point enqueueTime;
+		std::function<void()> function;
+
+		auto effectivePriorityAt(std::chrono::steady_clock::time_point now) const {
+			const auto waitTime = std::chrono::duration_cast<std::chrono::seconds>(
+				now - enqueueTime).count();
+			return priority + waitTime * threadpool::AgingRate;
+		}
+	};
+
+	void enqueue(Task task);
+
+	template<typename Rep, typename Period>
+	void enqueueFor(Task task, const std::chrono::duration<Rep, Period>& timeout) {
+		const TaskType taskType = task.type;
+		std::unique_lock<std::mutex> lock(mtx_);
+		const bool ready = notFullCv_.wait_for(lock, timeout, [this]() {
+			return stop_ || hasQueueCapacityLocked();
+		});
+
+		if (stop_) {
+			throw std::runtime_error("submit on stopped ThreadPool");
+		}
+		if (!ready) {
+			throw std::runtime_error("ThreadPool submit timeout");
+		}
+
+		pushTaskLocked(std::move(task));
+		lock.unlock();
+		notifyTaskAvailable(taskType);
+	}
+
+	bool hasQueueCapacityLocked() const;
+	bool hasTaskForWorkerLocked(bool highOnly) const;
+	bool isIdleLocked() const;
+	void pushTaskLocked(Task&& task);
+	void notifyTaskAvailable(TaskType taskType);
+	Task popBestTaskLocked(std::vector<Task>& tasks);
+	Task popNextTaskLocked();
+	void workerLoop(bool highOnly);
+	void shutdown();
+
 	std::vector<std::thread> workers_;
-	std::vector<Task> tasks_;
+	std::vector<Task> highTasks_;
+	std::vector<Task> normalTasks_;
 	std::mutex mtx_;
 	bool stop_ = false;
 	std::size_t maxQueueSize_;
-	std::size_t activeTasks_;
-	std::condition_variable notEmptyCv_;
+	std::size_t activeTasks_ = 0;
+	std::condition_variable highCv_;
+	std::condition_variable normalCv_;
 	std::condition_variable notFullCv_;
 	std::condition_variable idleCv_;
 };

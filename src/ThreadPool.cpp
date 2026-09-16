@@ -1,79 +1,160 @@
 #include "thread_pool/ThreadPool.h"
 
-ThreadPool::ThreadPool(std::size_t threadCount, std::size_t maxQueueSize)
-	: maxQueueSize_(maxQueueSize), activeTasks_(0) {
-	if (maxQueueSize == 0) {
-		throw std::invalid_argument("maxQueueSize must be greater than 0");
-	}
+#include <algorithm>
 
+ThreadPool::ThreadPool()
+	: ThreadPool(
+		std::max(1U, std::thread::hardware_concurrency()),
+		1000,
+		0) {
+}
+
+ThreadPool::ThreadPool(
+	std::size_t threadCount,
+	std::size_t maxQueueSize,
+	std::size_t reservedHighWorkers)
+	: maxQueueSize_(maxQueueSize) {
 	if (threadCount == 0) {
 		throw std::invalid_argument("threadCount must be greater than 0");
 	}
-
-	for (std::size_t i = 0; i < threadCount; ++i) {
-		workers_.emplace_back([this]() {
-			while (true) {
-				Task task;
-				{
-					std::unique_lock<std::mutex> lock(mtx_);
-					notEmptyCv_.wait(lock, [this]() {
-						return stop_ || !tasks_.empty();
-					});
-					if (stop_ && tasks_.empty()) {
-						return;
-					}
-					task = popBestTask();
-					++activeTasks_;
-				}
-
-				notFullCv_.notify_one();
-				task.function();
-
-				{
-					std::lock_guard<std::mutex> lock(mtx_);
-					--activeTasks_;
-					if (activeTasks_ == 0 && tasks_.empty()) {
-						idleCv_.notify_all();
-					}
-				}
-			}
-		});
+	if (maxQueueSize == 0) {
+		throw std::invalid_argument("maxQueueSize must be greater than 0");
 	}
+	if (reservedHighWorkers >= threadCount) {
+		throw std::invalid_argument("reservedHighWorkers must be less than threadCount");
+	}
+
+	workers_.reserve(threadCount);
+	try {
+		for (std::size_t i = 0; i < threadCount; ++i) {
+			const bool highOnly = i < reservedHighWorkers;
+			workers_.emplace_back([this, highOnly]() {
+				workerLoop(highOnly);
+			});
+		}
+	} catch (...) {
+		shutdown();
+		throw;
+	}
+}
+
+ThreadPool::~ThreadPool() {
+	shutdown();
 }
 
 void ThreadPool::waitIdle() {
 	std::unique_lock<std::mutex> lock(mtx_);
 	idleCv_.wait(lock, [this]() {
-		return tasks_.empty() && activeTasks_ == 0;
+		return isIdleLocked();
 	});
 }
 
-ThreadPool::~ThreadPool() {
+void ThreadPool::enqueue(Task task) {
+	const TaskType taskType = task.type;
+	std::unique_lock<std::mutex> lock(mtx_);
+	notFullCv_.wait(lock, [this]() {
+		return stop_ || hasQueueCapacityLocked();
+	});
+
+	if (stop_) {
+		throw std::runtime_error("submit on stopped ThreadPool");
+	}
+
+	pushTaskLocked(std::move(task));
+	lock.unlock();
+	notifyTaskAvailable(taskType);
+}
+
+bool ThreadPool::hasQueueCapacityLocked() const {
+	return highTasks_.size() + normalTasks_.size() < maxQueueSize_;
+}
+
+bool ThreadPool::hasTaskForWorkerLocked(bool highOnly) const {
+	return !highTasks_.empty() || (!highOnly && !normalTasks_.empty());
+}
+
+bool ThreadPool::isIdleLocked() const {
+	return highTasks_.empty() && normalTasks_.empty() && activeTasks_ == 0;
+}
+
+void ThreadPool::pushTaskLocked(Task&& task) {
+	auto& tasks = task.type == TaskType::High ? highTasks_ : normalTasks_;
+	tasks.push_back(std::move(task));
+}
+
+void ThreadPool::notifyTaskAvailable(TaskType taskType) {
+	if (taskType == TaskType::High) {
+		highCv_.notify_one();
+	}
+	normalCv_.notify_one();
+}
+
+ThreadPool::Task ThreadPool::popBestTaskLocked(std::vector<Task>& tasks) {
+	const auto now = std::chrono::steady_clock::now();
+	const auto best = std::max_element(
+		tasks.begin(),
+		tasks.end(),
+		[now](const Task& left, const Task& right) {
+			return left.effectivePriorityAt(now) < right.effectivePriorityAt(now);
+		});
+
+	Task task = std::move(*best);
+	tasks.erase(best);
+	return task;
+}
+
+ThreadPool::Task ThreadPool::popNextTaskLocked() {
+	if (!highTasks_.empty()) {
+		return popBestTaskLocked(highTasks_);
+	}
+	return popBestTaskLocked(normalTasks_);
+}
+
+void ThreadPool::workerLoop(bool highOnly) {
+	auto& taskAvailableCv = highOnly ? highCv_ : normalCv_;
+
+	while (true) {
+		Task task;
+		{
+			std::unique_lock<std::mutex> lock(mtx_);
+			taskAvailableCv.wait(lock, [this, highOnly]() {
+				return stop_ || hasTaskForWorkerLocked(highOnly);
+			});
+
+			if (stop_ && !hasTaskForWorkerLocked(highOnly)) {
+				return;
+			}
+
+			task = popNextTaskLocked();
+			++activeTasks_;
+		}
+
+		notFullCv_.notify_one();
+		task.function();
+
+		{
+			std::lock_guard<std::mutex> lock(mtx_);
+			--activeTasks_;
+			if (isIdleLocked()) {
+				idleCv_.notify_all();
+			}
+		}
+	}
+}
+
+void ThreadPool::shutdown() {
 	{
 		std::lock_guard<std::mutex> lock(mtx_);
 		stop_ = true;
 	}
 
-	notEmptyCv_.notify_all();
+	highCv_.notify_all();
+	normalCv_.notify_all();
 	notFullCv_.notify_all();
-	for (std::thread& worker : workers_) {
+
+	for (auto& worker : workers_) {
 		if (worker.joinable()) {
 			worker.join();
 		}
 	}
-}
-
-Task ThreadPool::popBestTask(){
-	std::vector<Task>::iterator best = tasks_.begin();
-	auto bestPriority = best->effectivepriority();
-	for (std::vector<Task>::iterator it = best + 1; it != tasks_.end(); ++it) {
-		const auto effectivePriority = it->effectivepriority();
-		if (bestPriority < effectivePriority) {
-			best = it;
-			bestPriority = effectivePriority;
-		}
-	}
-	Task bestTask = std::move(*best);
-	tasks_.erase(best);
-	return bestTask;
 }
