@@ -41,10 +41,10 @@ cmake --build build --config Release
 ```powershell
 cmake -S . -B build -DBUILD_BENCHMARK=ON
 cmake --build build --config Release --target ThreadPoolBenchmark
-build\Release\ThreadPoolBenchmark.exe 1000000
+build\Release\ThreadPoolBenchmark.exe 100000 1000
 ```
 
-命令行参数是任务数量，省略时默认为 `1000000`。启用 `BUILD_TESTING` 时，CTest 会额外注册一个使用 `1000` 个任务的低成本 benchmark smoke test。
+benchmark 的第一个命令行参数是任务数量，默认为 `100000`；第二个参数是每个任务的计算迭代次数，默认为 `1000`。程序会分别测试空任务调度和 CPU 计算任务，并比较 1、2、4、8 个工作线程与串行基线的耗时、吞吐量和加速比。启用 `BUILD_TESTING` 时，CTest 会额外注册一个使用 `1000` 个任务的低成本 benchmark smoke test。
 
 ## 测试
 
