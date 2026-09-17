@@ -78,8 +78,10 @@ bool ThreadPool::isIdleLocked() const {
 }
 
 void ThreadPool::pushTaskLocked(Task&& task) {
+	task.sequenceNumber = nextSequenceNumber_++;
+
 	auto& tasks = task.type == TaskType::High ? highTasks_ : normalTasks_;
-	tasks.push_back(std::move(task));
+	tasks.push(std::move(task));
 }
 
 void ThreadPool::notifyTaskAvailable(TaskType taskType) {
@@ -89,25 +91,16 @@ void ThreadPool::notifyTaskAvailable(TaskType taskType) {
 	normalCv_.notify_one();
 }
 
-ThreadPool::Task ThreadPool::popBestTaskLocked(std::vector<Task>& tasks) {
-	const auto now = std::chrono::steady_clock::now();
-	const auto best = std::max_element(
-		tasks.begin(),
-		tasks.end(),
-		[now](const Task& left, const Task& right) {
-			return left.effectivePriorityAt(now) < right.effectivePriorityAt(now);
-		});
-
-	Task task = std::move(*best);
-	tasks.erase(best);
-	return task;
-}
-
 ThreadPool::Task ThreadPool::popNextTaskLocked() {
 	if (!highTasks_.empty()) {
-		return popBestTaskLocked(highTasks_);
+		Task task = highTasks_.top();
+		highTasks_.pop();
+		return task;
 	}
-	return popBestTaskLocked(normalTasks_);
+
+	Task task = normalTasks_.top();
+	normalTasks_.pop();
+	return task;
 }
 
 void ThreadPool::workerLoop(bool highOnly) {

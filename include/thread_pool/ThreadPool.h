@@ -7,11 +7,13 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <cstdint>
 
 namespace threadpool {
 	inline constexpr int AgingRate = 2;
@@ -114,13 +116,40 @@ private:
 	struct Task {
 		TaskType type;
 		int priority;
-		std::chrono::steady_clock::time_point enqueueTime;
+		std::int64_t sortKey;
+		std::uint64_t sequenceNumber;
 		std::function<void()> function;
 
-		auto effectivePriorityAt(std::chrono::steady_clock::time_point now) const {
-			const auto waitTime = std::chrono::duration_cast<std::chrono::seconds>(
-				now - enqueueTime).count();
-			return priority + waitTime * threadpool::AgingRate;
+		Task(
+			TaskType taskType,
+			int priority,
+			std::chrono::steady_clock::time_point enqueueTime,
+			std::function<void()> taskFunction)
+			: type(taskType),
+				sortKey(calculateSortKey(priority, enqueueTime)),
+				sequenceNumber(0),
+				function(std::move(taskFunction))
+		{
+		}
+
+		Task() = default;
+
+		static std::int64_t calculateSortKey(
+			int priority,
+			std::chrono::steady_clock::time_point enqueueTime) {
+			const auto enqueueSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+				enqueueTime.time_since_epoch()).count();
+			return static_cast<std::int64_t>(priority)
+				- static_cast<std::int64_t>(threadpool::AgingRate) * enqueueSeconds;
+		}
+	};
+
+	struct TaskCompare {
+		bool operator()(const Task& left, const Task& right) const {
+			if (left.sortKey != right.sortKey) {
+				return left.sortKey < right.sortKey;
+			}
+			return left.sequenceNumber > right.sequenceNumber;
 		}
 	};
 
@@ -151,18 +180,22 @@ private:
 	bool isIdleLocked() const;
 	void pushTaskLocked(Task&& task);
 	void notifyTaskAvailable(TaskType taskType);
-	Task popBestTaskLocked(std::vector<Task>& tasks);
+	Task popBestTaskLocked();
 	Task popNextTaskLocked();
 	void workerLoop(bool highOnly);
 	void shutdown();
 
 	std::vector<std::thread> workers_;
-	std::vector<Task> highTasks_;
-	std::vector<Task> normalTasks_;
+
+	using TaskQueue = std::priority_queue<Task, std::vector<Task>, TaskCompare>;
+	TaskQueue highTasks_;
+	TaskQueue normalTasks_;
+
 	std::mutex mtx_;
 	bool stop_ = false;
 	std::size_t maxQueueSize_;
 	std::size_t activeTasks_ = 0;
+	std::uint64_t nextSequenceNumber_ = 0;
 	std::condition_variable highCv_;
 	std::condition_variable normalCv_;
 	std::condition_variable notFullCv_;

@@ -159,6 +159,35 @@ TEST(ThreadPool, HigherPriorityQueuedTasksRunFirst) {
 	EXPECT_EQ(*order, (std::vector<int>{0, 100, 20, -10}));
 }
 
+TEST(ThreadPool, SamePriorityTasksPreserveSubmissionOrder) {
+	ThreadPool pool(1, 8);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	std::vector<int> order;
+
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
+		started->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+
+	std::vector<std::future<void>> queued;
+	for (int value = 1; value <= 4; ++value) {
+		queued.push_back(pool.submit(0, [&order, value] {
+			order.push_back(value);
+		}));
+	}
+
+	gate.open();
+	running.get();
+	for (auto& task : queued) {
+		task.get();
+	}
+
+	EXPECT_EQ(order, (std::vector<int>{1, 2, 3, 4}));
+}
+
 TEST(ThreadPool, QueueTimeout) {
 	ThreadPool pool(1, 1);
 	Gate gate;
