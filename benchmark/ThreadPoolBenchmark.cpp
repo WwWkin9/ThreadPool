@@ -3,11 +3,21 @@
 #include <iostream>
 #include <chrono>
 #include <atomic>
+#include <cstddef>
+#include <string>
 
 
-int main()
+int main(int argc, char* argv[])
 {
-    const size_t taskCount = 1000000;
+    const std::size_t taskCount = argc > 1
+        ? std::stoull(argv[1])
+        : 1000000;
+
+    if (taskCount == 0)
+    {
+        std::cerr << "task count must be greater than 0\n";
+        return 1;
+    }
 
 
     ThreadPool pool(8, taskCount);
@@ -22,8 +32,7 @@ int main()
 
     for(size_t i = 0; i < taskCount; i++)
     {
-        pool.submit([&counter](){
-
+        pool.submit(10, [&counter](){
             counter.fetch_add(
                 1,
                 std::memory_order_relaxed
@@ -69,4 +78,6 @@ int main()
         << "counter: "
         << counter
         << std::endl;
+
+    return counter == taskCount ? 0 : 1;
 }

@@ -36,6 +36,16 @@ cmake --build build --config Release
 
 在 VS Code 中可以运行工作区任务 `CMake: Test ThreadPool`。本项目是 C++/CMake 项目，不包含 Go 模块。
 
+启用 benchmark：
+
+```powershell
+cmake -S . -B build -DBUILD_BENCHMARK=ON
+cmake --build build --config Release --target ThreadPoolBenchmark
+build\Release\ThreadPoolBenchmark.exe 1000000
+```
+
+命令行参数是任务数量，省略时默认为 `1000000`。启用 `BUILD_TESTING` 时，CTest 会额外注册一个使用 `1000` 个任务的低成本 benchmark smoke test。
+
 ## 测试
 
 测试使用 GoogleTest 1.18.0，并通过 CTest 自动发现。当前测试覆盖提交结果、优先级顺序、参数校验、异常传递、并发执行、队列边界、空闲等待、并发生产者和析构时清空队列等行为。
@@ -46,7 +56,7 @@ ctest --test-dir build -C Debug --output-on-failure
 ctest --test-dir build -C Debug -R ThreadPool.QueueTimeout --output-on-failure
 ```
 
-最后一条命令只运行队列超时测试。也可以直接运行 `build/Debug/ThreadPoolTest.exe` 执行全部测试。项目的持续集成会在 Windows 和 Linux 上分别验证 Debug、Release 构建。
+最后一条命令只运行队列超时测试。启用 benchmark 后，可以使用 `ctest --test-dir build -C Release -R ThreadPool.Benchmark --output-on-failure` 单独运行 benchmark smoke test。也可以直接运行 `build/Debug/ThreadPoolTest.exe` 执行全部测试。项目的持续集成会在 Windows 和 Linux 上分别验证 Debug、Release 构建。
 
 ## 快速开始
 
