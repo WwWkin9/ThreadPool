@@ -188,6 +188,35 @@ TEST(ThreadPool, SamePriorityTasksPreserveSubmissionOrder) {
 	EXPECT_EQ(order, (std::vector<int>{1, 2, 3, 4}));
 }
 
+TEST(ThreadPool, WaitingTaskGainsPriority) {
+	ThreadPool pool(1, 4);
+	Gate gate;
+	auto started = std::make_shared<std::promise<void>>();
+	auto ready = started->get_future();
+	std::vector<int> order;
+
+	auto running = pool.submit(0, [started, signal = gate.signal()] {
+		started->set_value();
+		signal.wait();
+	});
+	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
+
+	auto aged = pool.submit(-1, [&order] {
+		order.push_back(-1);
+	});
+	std::this_thread::sleep_for(1200ms);
+	auto newer = pool.submit(0, [&order] {
+		order.push_back(0);
+	});
+
+	gate.open();
+	running.get();
+	aged.get();
+	newer.get();
+
+	EXPECT_EQ(order, (std::vector<int>{-1, 0}));
+}
+
 TEST(ThreadPool, QueueTimeout) {
 	ThreadPool pool(1, 1);
 	Gate gate;

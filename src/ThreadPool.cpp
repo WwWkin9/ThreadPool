@@ -107,7 +107,7 @@ void ThreadPool::workerLoop(bool highOnly) {
 	auto& taskAvailableCv = highOnly ? highCv_ : normalCv_;
 
 	while (true) {
-		Task task;
+		std::optional<Task> task;
 		{
 			std::unique_lock<std::mutex> lock(mtx_);
 			taskAvailableCv.wait(lock, [this, highOnly]() {
@@ -118,12 +118,12 @@ void ThreadPool::workerLoop(bool highOnly) {
 				return;
 			}
 
-			task = popNextTaskLocked();
+			task.emplace(popNextTaskLocked());
 			++activeTasks_;
 		}
 
 		notFullCv_.notify_one();
-		task.function();
+		task->function();
 
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
