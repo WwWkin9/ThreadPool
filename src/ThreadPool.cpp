@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+using namespace threadpool;
+
 ThreadPool::ThreadPool()
 	: ThreadPool(
 		std::max(1U, std::thread::hardware_concurrency()),
@@ -93,14 +95,10 @@ void ThreadPool::notifyTaskAvailable(TaskType taskType) {
 
 ThreadPool::Task ThreadPool::popNextTaskLocked() {
 	if (!highTasks_.empty()) {
-		Task task = highTasks_.top();
-		highTasks_.pop();
-		return task;
+		return highTasks_.pop();
 	}
 
-	Task task = normalTasks_.top();
-	normalTasks_.pop();
-	return task;
+	return normalTasks_.pop();
 }
 
 void ThreadPool::workerLoop(bool highOnly) {

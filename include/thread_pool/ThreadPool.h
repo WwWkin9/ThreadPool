@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 #include <cstdint>
+#include <algorithm>
 
 namespace threadpool {
 	inline constexpr int AgingRate = 2;
@@ -148,6 +149,35 @@ namespace threadpool {
 			}
 		};
 
+		class TaskQueue {
+		public:
+			void push(Task task) {
+				tasks_.push_back(std::move(task));
+				std::push_heap(tasks_.begin(), tasks_.end(), TaskCompare{});
+			}
+
+			Task pop() {
+				std::pop_heap(tasks_.begin(), tasks_.end(), TaskCompare{});
+				Task task = std::move(tasks_.back());
+				tasks_.pop_back();
+				return task;
+			}
+
+			bool empty() const {
+				return tasks_.empty();
+			}
+
+			std::size_t size() const {
+				return tasks_.size();
+			}
+
+			void reserve(std::size_t capacity) {
+				tasks_.reserve(capacity);
+			}
+		private:
+			std::vector<Task> tasks_;
+		};
+
 		void enqueue(Task task);
 
 		template<typename Rep, typename Period>
@@ -180,11 +210,8 @@ namespace threadpool {
 		void shutdown();
 
 		std::vector<std::thread> workers_;
-
-		using TaskQueue = std::priority_queue<Task, std::vector<Task>, TaskCompare>;
 		TaskQueue highTasks_;
 		TaskQueue normalTasks_;
-
 		std::mutex mtx_;
 		bool stop_ = false;
 		std::size_t maxQueueSize_;

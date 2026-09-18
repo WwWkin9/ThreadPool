@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+using namespace threadpool;
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
