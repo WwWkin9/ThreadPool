@@ -68,6 +68,38 @@ namespace threadpool {
 			return result;
 		}
 
+		template<typename F, typename... Args>
+		void post(int priority, F&& f, Args&&... args)
+		{
+			post(
+				TaskType::Normal,
+				priority,
+				std::forward<F>(f),
+				std::forward<Args>(args)...);
+		}
+
+		template<typename F, typename... Args>
+		void post(TaskType taskType, int priority, F&& f, Args&&... args)
+		{
+			auto boundTask = std::bind(
+				std::forward<F>(f),
+				std::forward<Args>(args)...);
+			using BoundTask = decltype(boundTask);
+			auto sharedTask = std::make_shared<BoundTask>(std::move(boundTask));
+
+			enqueue(Task{
+				taskType,
+				priority,
+				std::chrono::steady_clock::now(),
+				[sharedTask]() {
+					try {
+						(*sharedTask)();
+					} catch (...) {
+					}
+				}
+			});
+		}
+
 		template<typename Rep, typename Period, typename F, typename... Args>
 		auto submitFor(
 			int priority,

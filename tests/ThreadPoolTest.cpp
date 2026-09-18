@@ -115,6 +115,26 @@ TEST(ThreadPool, MoveOnlyCallable) {
 	EXPECT_EQ(result.get(), 42);
 }
 
+TEST(ThreadPool, PostExecutesMoveOnlyCallable) {
+	ThreadPool pool(1, 1);
+	std::promise<int> completed;
+	auto result = completed.get_future();
+	pool.post(10, [value = std::make_unique<int>(42), &completed]() mutable {
+		completed.set_value(*value);
+	});
+	EXPECT_EQ(result.get(), 42);
+	pool.waitIdle();
+}
+
+TEST(ThreadPool, PostTaskExceptionDoesNotStopWorker) {
+	ThreadPool pool(1, 2);
+	pool.post(10, [] {
+		throw std::logic_error("post task failed");
+	});
+	auto result = pool.submit(10, [] { return 7; });
+	EXPECT_EQ(result.get(), 7);
+}
+
 TEST(ThreadPool, ConcurrentWorkers) {
 	ThreadPool pool(2, 2);
 	Gate gate;

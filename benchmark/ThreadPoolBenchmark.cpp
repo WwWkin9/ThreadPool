@@ -76,6 +76,28 @@ Result runThreadPool(
     return {Clock::now() - start, checksum};
 }
 
+Result runThreadPoolPost(
+    std::size_t taskCount,
+    std::size_t workIterations,
+    std::size_t workerCount) {
+    ThreadPool pool(workerCount, taskCount);
+    std::vector<std::uint64_t> results(taskCount);
+    const auto start = Clock::now();
+
+    for (std::size_t task = 0; task < taskCount; ++task) {
+        pool.post(10, [&results, task, workIterations]() {
+            results[task] = doWork(workIterations, task);
+        });
+    }
+    pool.waitIdle();
+
+    std::uint64_t checksum = 0;
+    for (const std::uint64_t result : results) {
+        checksum += result;
+    }
+    return {Clock::now() - start, checksum};
+}
+
 SelectionTask makeSelectionTask(std::size_t index) {
     const auto key = static_cast<std::int64_t>((index * 37U) % 1001U)
         - static_cast<std::int64_t>(index / 100U);
@@ -195,6 +217,17 @@ int main(int argc, char* argv[])
     for (const std::size_t workerCount : workerCounts) {
         if (workerCount <= maxWorkers) {
             const Result result = runThreadPool(taskCount, workIterations, workerCount);
+            printResult(std::to_string(workerCount) + " workers", taskCount, result, workSerial);
+            if (result.checksum != workSerial.checksum) {
+                return 1;
+            }
+        }
+    }
+
+    std::cout << "\nCPU workload without future:\n";
+    for (const std::size_t workerCount : workerCounts) {
+        if (workerCount <= maxWorkers) {
+            const Result result = runThreadPoolPost(taskCount, workIterations, workerCount);
             printResult(std::to_string(workerCount) + " workers", taskCount, result, workSerial);
             if (result.checksum != workSerial.checksum) {
                 return 1;

@@ -100,6 +100,14 @@ auto withArgs = pool.submit(5, [](int left, int right) {
 
 `submit` 返回 `std::future`。任务函数抛出的异常会保存到 future 中，并在调用 `get()` 时重新抛出。可调用对象和参数支持移动语义，包括只移动类型。
 
+如果不需要返回值或通过 future 获取异常，可以使用 `post`。它只负责提交任务，不创建 `std::future`；`post` 任务抛出的异常不会传播到调用方：
+
+```cpp
+pool.post(10, [](int value) {
+    // 处理后台任务
+}, 42);
+```
+
 当等待队列已满时，`submit` 会阻塞，直到队列出现空位或线程池开始停止。线程池停止后继续提交会抛出 `std::runtime_error`。
 
 ### 带超时提交
