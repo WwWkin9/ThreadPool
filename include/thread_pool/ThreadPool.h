@@ -145,10 +145,16 @@ namespace threadpool {
 
 	private:
 		struct Task {
-			TaskType type;
-			std::int64_t sortKey;
-			std::uint64_t sequenceNumber;
-			std::function<void()> function;
+			TaskType type = TaskType::Normal;
+			std::int64_t sortKey = 0;
+			std::uint64_t sequenceNumber = 0;
+			std::function<void()> function = [] {};
+
+			Task() = default;
+			Task(const Task&) = delete;
+			Task& operator=(const Task&) = delete;
+			Task(Task&&) noexcept = default;
+			Task& operator=(Task&&) noexcept = default;
 
 			Task(
 				TaskType taskType,
@@ -159,8 +165,7 @@ namespace threadpool {
 					sortKey(calculateSortKey(priority, enqueueTime)),
 					sequenceNumber(0),
 					function(std::move(taskFunction))
-			{
-			}
+				{}
 
 			static std::int64_t calculateSortKey(
 				int priority,
@@ -192,7 +197,7 @@ namespace threadpool {
 				std::pop_heap(tasks_.begin(), tasks_.end(), TaskCompare{});
 				Task task = std::move(tasks_.back());
 				tasks_.pop_back();
-				return task;
+				return std::move(task);
 			}
 
 			bool empty() const {
