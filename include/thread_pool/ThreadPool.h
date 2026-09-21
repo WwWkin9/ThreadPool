@@ -16,6 +16,7 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <atomic>
 
 namespace threadpool {
 	inline constexpr int AgingRate = 2;
@@ -222,10 +223,10 @@ namespace threadpool {
 			const TaskType taskType = task.type;
 			std::unique_lock<std::mutex> lock(mtx_);
 			const bool ready = notFullCv_.wait_for(lock, timeout, [this]() {
-				return stop_ || hasQueueCapacityLocked();
+				return stop_.load(std::memory_order_acquire) || hasQueueCapacityLocked();
 			});
 
-			if (stop_) {
+			if (stop_.load(std::memory_order_acquire)) {
 				throw std::runtime_error("submit on stopped ThreadPool");
 			}
 			if (!ready) {
@@ -250,9 +251,9 @@ namespace threadpool {
 		TaskQueue highTasks_;
 		TaskQueue normalTasks_;
 		std::mutex mtx_;
-		bool stop_ = false;
+		std::atomic<bool> stop_ = false;
 		std::size_t maxQueueSize_;
-		std::size_t activeTasks_ = 0;
+		std::atomic<std::size_t> activeTasks_ = 0;
 		std::uint64_t nextSequenceNumber_ = 0;
 		std::condition_variable highCv_;
 		std::condition_variable normalCv_;

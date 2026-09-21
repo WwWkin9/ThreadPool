@@ -76,7 +76,8 @@ bool ThreadPool::hasTaskForWorkerLocked(bool highOnly) const {
 }
 
 bool ThreadPool::isIdleLocked() const {
-	return highTasks_.empty() && normalTasks_.empty() && activeTasks_ == 0;
+	return highTasks_.empty() && normalTasks_.empty()
+		&& activeTasks_.load(std::memory_order_acquire) == 0;
 }
 
 void ThreadPool::pushTaskLocked(Task&& task) {
@@ -109,10 +110,12 @@ void ThreadPool::workerLoop(bool highOnly) {
 		{
 			std::unique_lock<std::mutex> lock(mtx_);
 			taskAvailableCv.wait(lock, [this, highOnly]() {
-				return stop_ || hasTaskForWorkerLocked(highOnly);
+				return stop_.load(std::memory_order_acquire)
+					|| hasTaskForWorkerLocked(highOnly);
 			});
 
-			if (stop_ && !hasTaskForWorkerLocked(highOnly)) {
+			if (stop_.load(std::memory_order_acquire)
+				&& !hasTaskForWorkerLocked(highOnly)) {
 				return;
 			}
 
@@ -134,10 +137,7 @@ void ThreadPool::workerLoop(bool highOnly) {
 }
 
 void ThreadPool::shutdown() {
-	{
-		std::lock_guard<std::mutex> lock(mtx_);
-		stop_ = true;
-	}
+	stop_.store(true, std::memory_order_release);
 
 	highCv_.notify_all();
 	normalCv_.notify_all();
