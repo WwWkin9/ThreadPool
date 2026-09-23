@@ -143,6 +143,7 @@ namespace threadpool {
 		}
 
 		void waitIdle();
+		void shutdown();
 
 	private:
 		struct Task {
@@ -245,7 +246,6 @@ namespace threadpool {
 		void notifyTaskAvailable(TaskType taskType);
 		Task popNextTaskLocked();
 		void workerLoop(bool highOnly);
-		void shutdown();
 
 		std::vector<std::thread> workers_;
 		TaskQueue highTasks_;
