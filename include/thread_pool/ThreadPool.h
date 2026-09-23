@@ -143,7 +143,6 @@ namespace threadpool {
 		}
 
 		void waitIdle();
-		void shutdown();
 
 	private:
 		struct Task {
@@ -218,6 +217,7 @@ namespace threadpool {
 		};
 
 		void enqueue(Task task);
+		void shutdown();
 
 		template<typename Rep, typename Period>
 		void enqueueFor(Task task, const std::chrono::duration<Rep, Period>& timeout) {

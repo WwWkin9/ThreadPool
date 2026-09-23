@@ -347,48 +347,6 @@ TEST(ThreadPool, BlockingSubmission) {
 	EXPECT_EQ(third.get(), 3);
 }
 
-TEST(ThreadPool, ShutdownWakesBlockedSubmitter){
-	ThreadPool pool(1, 1);
-	Gate gate;
-	auto started = std::make_shared<std::promise<void>>();
-	auto ready = started->get_future();
-	auto running = pool.submit(0, [started, signal = gate.signal()] {
-		started->set_value();
-		signal.wait();
-		return 1;
-	});
-	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-	auto queued = pool.submit(1, [] { return 2; });
-	auto producerStarted = std::make_shared<std::promise<void>>();
-	auto producerReady = producerStarted->get_future();
-	auto producer = std::async(std::launch::async, [&pool, producerStarted] {
-		producerStarted->set_value();
-		try{
-			auto result = pool.submit(2, [] { return 3; });
-			(void)result;
-			return false;
-		} catch (const std::runtime_error& error) {
-			return std::string(error.what()) == "submit on stopped ThreadPool";
-		}
-	});
-	const bool producerStartedInTime = producerReady.wait_for(2s) == std::future_status::ready;
-	const bool blocked = producer.wait_for(100ms) == std::future_status::timeout;
-	auto stopper = std::async(std::launch::async, [&pool]{
-		pool.shutdown();
-	});
-	const bool producerWoke = producer.wait_for(2s) == std::future_status::ready;
-	gate.open();
-	EXPECT_TRUE(producerStartedInTime);
-	EXPECT_TRUE(blocked)
-	<< "submit should block with a full queue";
-	ASSERT_TRUE(producerWoke)
-	<< "shutdown should wake the blocked submitter";
-	EXPECT_TRUE(producer.get());
-	stopper.get();
-	EXPECT_EQ(running.get(), 1);
-	EXPECT_EQ(queued.get(), 2);
-}
-
 TEST(ThreadPool, WaitForIdle) {
 	ThreadPool pool(1, 1);
 	Gate gate;
@@ -462,29 +420,6 @@ TEST(ThreadPool, DestructorDrainsQueue) {
 	EXPECT_EQ(queued.get(), 2);
 }
 
-TEST(ThreadPool, ExplicitShutdownDrainsQueuedTasks) {
-	std::future<int> running;
-	std::future<int> queued;
-
-	ThreadPool pool(1, 1);
-	auto started = std::make_shared<std::promise<void>>();
-	auto ready = started->get_future();
-	
-	running = pool.submit(0, [started] {
-		started->set_value();
-		std::this_thread::sleep_for(100ms);
-		return 1;
-	});
-	ASSERT_EQ(ready.wait_for(2s), std::future_status::ready);
-	
-	queued = pool.submit(1, [] { return 2; });
-	
-	pool.shutdown();
-	
-	EXPECT_EQ(running.get(), 1);
-	EXPECT_EQ(queued.get(), 2);
-}
-
 TEST(ThreadPool, ConcurrentProducers) {
 	ThreadPool pool(4, 8);
 	std::atomic<int> executed{0};
@@ -512,55 +447,6 @@ TEST(ThreadPool, ConcurrentProducers) {
 	pool.waitIdle();
 	EXPECT_EQ(total, 200);
 	EXPECT_EQ(executed.load(), 200);
-}
-
-TEST(ThreadPool, RejectsSubmitAfterShutdown) {
-    ThreadPool pool(1, 1);
-    pool.shutdown();
-    try {
-        pool.submit(0, []() {
-            return 42;
-        });
-        FAIL() << "Expected std::runtime_error";
-    }
-    catch (const std::runtime_error& e) {
-        EXPECT_STREQ(
-            e.what(),
-            "submit on stopped ThreadPool"
-        );
-    }
-    catch (...) {
-        FAIL() << "Expected std::runtime_error";
-    }
-}
-
-TEST(ThreadPool, RejectsTimeSubmissionAfterShutdown){
-	ThreadPool pool(1, 1);
-    pool.shutdown();
-    try {
-        pool.submitFor(0,0ms, []() {
-            return 42;
-        });
-        FAIL() << "Expected std::runtime_error";
-    }
-    catch (const std::runtime_error& e) {
-        EXPECT_STREQ(
-            e.what(),
-            "submit on stopped ThreadPool"
-        );
-    }
-    catch (...) {
-        FAIL() << "Expected std::runtime_error";
-    }
-}
-
-TEST(ThreadPool, RejectsPostAfterShutdown) {
-	ThreadPool pool(1, 1);
-	pool.shutdown();
-
-	EXPECT_THROW(
-		pool.post(0, [] {}),
-		std::runtime_error);
 }
 
 } // namespace
