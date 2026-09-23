@@ -224,10 +224,10 @@ namespace threadpool {
 			const TaskType taskType = task.type;
 			std::unique_lock<std::mutex> lock(mtx_);
 			const bool ready = notFullCv_.wait_for(lock, timeout, [this]() {
-				return stop_.load(std::memory_order_acquire) || hasQueueCapacityLocked();
+				return stop_ || hasQueueCapacityLocked();
 			});
 
-			if (stop_.load(std::memory_order_acquire)) {
+			if (stop_) {
 				throw std::runtime_error("submit on stopped ThreadPool");
 			}
 			if (!ready) {
