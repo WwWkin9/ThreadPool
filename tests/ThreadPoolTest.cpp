@@ -514,4 +514,53 @@ TEST(ThreadPool, ConcurrentProducers) {
 	EXPECT_EQ(executed.load(), 200);
 }
 
+TEST(ThreadPool, RejectsSubmitAfterShutdown) {
+    ThreadPool pool(1, 1);
+    pool.shutdown();
+    try {
+        pool.submit(0, []() {
+            return 42;
+        });
+        FAIL() << "Expected std::runtime_error";
+    }
+    catch (const std::runtime_error& e) {
+        EXPECT_STREQ(
+            e.what(),
+            "submit on stopped ThreadPool"
+        );
+    }
+    catch (...) {
+        FAIL() << "Expected std::runtime_error";
+    }
+}
+
+TEST(ThreadPool, RejectsTimeSubmissionAfterShutdown){
+	ThreadPool pool(1, 1);
+    pool.shutdown();
+    try {
+        pool.submitFor(0,0ms, []() {
+            return 42;
+        });
+        FAIL() << "Expected std::runtime_error";
+    }
+    catch (const std::runtime_error& e) {
+        EXPECT_STREQ(
+            e.what(),
+            "submit on stopped ThreadPool"
+        );
+    }
+    catch (...) {
+        FAIL() << "Expected std::runtime_error";
+    }
+}
+
+TEST(ThreadPool, RejectsPostAfterShutdown) {
+	ThreadPool pool(1, 1);
+	pool.shutdown();
+
+	EXPECT_THROW(
+		pool.post(0, [] {}),
+		std::runtime_error);
+}
+
 } // namespace
