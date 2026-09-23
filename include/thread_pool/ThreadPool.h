@@ -251,7 +251,7 @@ namespace threadpool {
 		TaskQueue highTasks_;
 		TaskQueue normalTasks_;
 		std::mutex mtx_;
-		std::atomic<bool> stop_ = false;
+		bool stop_ = false;
 		std::size_t maxQueueSize_;
 		std::atomic<std::size_t> activeTasks_ = 0;
 		std::uint64_t nextSequenceNumber_ = 0;

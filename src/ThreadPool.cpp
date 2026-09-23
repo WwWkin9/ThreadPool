@@ -110,12 +110,10 @@ void ThreadPool::workerLoop(bool highOnly) {
 		{
 			std::unique_lock<std::mutex> lock(mtx_);
 			taskAvailableCv.wait(lock, [this, highOnly]() {
-				return stop_.load(std::memory_order_acquire)
-					|| hasTaskForWorkerLocked(highOnly);
+				return stop_ || hasTaskForWorkerLocked(highOnly);
 			});
 
-			if (stop_.load(std::memory_order_acquire)
-				&& !hasTaskForWorkerLocked(highOnly)) {
+			if (stop_ && !hasTaskForWorkerLocked(highOnly)) {
 				return;
 			}
 
@@ -137,7 +135,10 @@ void ThreadPool::workerLoop(bool highOnly) {
 }
 
 void ThreadPool::shutdown() {
-	stop_.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(mtx_);
+		stop_ = true;
+	}
 
 	highCv_.notify_all();
 	normalCv_.notify_all();
